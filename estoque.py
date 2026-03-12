@@ -1,71 +1,62 @@
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import xmltodict
-import os
 
-# Nome do arquivo de banco de dados
-DB_FILE = "meu_estoque.csv"
+# Configuracao da pagina
+st.set_page_config(page_title="Estoque na Nuvem", layout="wide")
+st.title("📦 Sistema de Estoque - Conectado ao Google Sheets")
 
-def carregar_dados():
-    if os.path.exists(DB_FILE):
-        try:
-            return pd.read_csv(DB_FILE)
-        except:
-            return pd.read_csv(DB_FILE, encoding='latin1')
-    return pd.DataFrame(columns=["Codigo", "Produto", "Quantidade", "Preco_Unitario"])
+# Criar conexao com o Google Sheets
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-def salvar_dados(df):
-    df.to_csv(DB_FILE, index=False)
-
-st.set_page_config(page_title="Estoque NF", layout="wide")
-st.title("Sistema de Estoque - Importacao de Nota Fiscal")
+# Funcao para ler os dados da planilha
+def buscar_estoque():
+    return conn.read(ttl=0) # ttl=0 garante que ele busque o dado mais atual
 
 st.header("1. Importar Nota Fiscal (XML)")
-arquivo_xml = st.file_uploader("Arraste o arquivo XML aqui", type="xml")
+arquivo_xml = st.file_uploader("Arraste o arquivo XML da nota", type="xml")
 
 if arquivo_xml:
     try:
         conteudo_xml = arquivo_xml.read()
         dados_xml = xmltodict.parse(conteudo_xml)
         
-        # Tenta encontrar os dados da nota
         nfe_root = dados_xml.get('nfeProc', {}).get('NFe', {}).get('infNFe', {})
         if not nfe_root:
              nfe_root = dados_xml.get('NFe', {}).get('infNFe', {})
              
         produtos_nfe = nfe_root.get('det', [])
-        
         if not isinstance(produtos_nfe, list):
             produtos_nfe = [produtos_nfe]
 
-        st.subheader("Produtos encontrados:")
         novos_itens = []
-        
         for item in produtos_nfe:
             prod = item['prod']
-            nome = prod['xProd']
-            qtd = float(prod['qCom'])
-            preco = float(prod['vUnCom'])
-            codigo = prod['cProd']
-            
-            st.write(f"Item: {nome} | Qtd: {qtd} | R$: {preco}")
-            novos_itens.append({"Codigo": str(codigo), "Produto": nome, "Quantidade": qtd, "Preco_Unitario": preco})
+            novos_itens.append({
+                "Codigo": str(prod['cProd']),
+                "Produto": prod['xProd'],
+                "Quantidade": float(prod['qCom']),
+                "Preco_Unitario": float(prod['vUnCom'])
+            })
+            st.write(f"✅ {prod['xProd']} - Qtd: {prod['qCom']}")
 
-        if st.button("Salvar no Estoque"):
-            estoque_atual = carregar_dados()
-            estoque_atual['Codigo'] = estoque_atual['Codigo'].astype(str)
-            
+        if st.button("Salvar na Planilha Google"):
+            estoque_atual = buscar_estoque()
             novo_df = pd.DataFrame(novos_itens)
-            # Soma as quantidades se o produto ja existir
+            
+            # Une o que ja tem com o novo e soma as quantidades
             estoque_final = pd.concat([estoque_atual, novo_df]).groupby(['Codigo', 'Produto'], as_index=False).sum()
-            salvar_dados(estoque_final)
-            st.success("Estoque atualizado!")
+            
+            # Atualiza a planilha
+            conn.update(data=estoque_final)
+            st.success("Dados salvos com sucesso no Google Sheets!")
             st.rerun()
             
     except Exception as e:
-        st.error(f"Erro ao ler nota: {e}")
+        st.error(f"Erro: {e}")
 
 st.markdown("---")
-st.header("2. Estoque Atual")
-estoque_exibir = carregar_dados()
-st.dataframe(estoque_exibir, use_container_width=True)
+st.header("2. Estoque Atual (Direto da Planilha)")
+dados = buscar_estoque()
+st.dataframe(dados, use_container_width=True)
