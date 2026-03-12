@@ -1,21 +1,22 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import xmltodict
+import requests
 
-# Configuracao da pagina
-st.set_page_config(page_title="Estoque na Nuvem", layout="wide")
-st.title("📦 Sistema de Estoque - Conectado ao Google Sheets")
+# Configurações do formulário (IDs que pegamos do seu link)
+FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSemnrbeHWnsaJDJbhdRNEuGY3pI2vFrPvqXuystlzhUFwnoEQ/formResponse"
 
-# Criar conexao com o Google Sheets
-conn = st.connection("gsheets", type=GSheetsConnection)
+# Dicionário mapeando as entradas do Google Forms
+ID_CODIGO = "entry.2084338753"
+ID_PRODUTO = "entry.333539528"
+ID_QTD = "entry.1801737990"
+ID_PRECO = "entry.981122510"
 
-# Funcao para ler os dados da planilha
-def buscar_estoque():
-    return conn.read(ttl=0) # ttl=0 garante que ele busque o dado mais atual
+st.set_page_config(page_title="Estoque Loja", layout="wide")
+st.title("📦 Sistema de Entrada de Estoque")
 
 st.header("1. Importar Nota Fiscal (XML)")
-arquivo_xml = st.file_uploader("Arraste o arquivo XML da nota", type="xml")
+arquivo_xml = st.file_uploader("Arraste o arquivo XML da nota aqui", type="xml")
 
 if arquivo_xml:
     try:
@@ -30,33 +31,36 @@ if arquivo_xml:
         if not isinstance(produtos_nfe, list):
             produtos_nfe = [produtos_nfe]
 
-        novos_itens = []
+        st.subheader("Produtos detectados na nota:")
+        
         for item in produtos_nfe:
             prod = item['prod']
-            novos_itens.append({
-                "Codigo": str(prod['cProd']),
-                "Produto": prod['xProd'],
-                "Quantidade": float(prod['qCom']),
-                "Preco_Unitario": float(prod['vUnCom'])
-            })
-            st.write(f"✅ {prod['xProd']} - Qtd: {prod['qCom']}")
-
-        if st.button("Salvar na Planilha Google"):
-            estoque_atual = buscar_estoque()
-            novo_df = pd.DataFrame(novos_itens)
+            nome = prod['xProd']
+            qtd = prod['qCom']
+            preco = prod['vUnCom']
+            codigo = prod['cProd']
             
-            # Une o que ja tem com o novo e soma as quantidades
-            estoque_final = pd.concat([estoque_atual, novo_df]).groupby(['Codigo', 'Produto'], as_index=False).sum()
+            col1, col2 = st.columns([3, 1])
+            col1.write(f"🔹 **{nome}** (Cód: {codigo})")
             
-            # Atualiza a planilha
-            conn.update(data=estoque_final)
-            st.success("Dados salvos com sucesso no Google Sheets!")
-            st.rerun()
+            # Botão individual para cada item para garantir o envio correto
+            if col2.button(f"Salvar {codigo}"):
+                dados_form = {
+                    ID_CODIGO: codigo,
+                    ID_PRODUTO: nome,
+                    ID_QTD: qtd,
+                    ID_PRECO: preco
+                }
+                # Envia os dados para o Google Forms
+                resposta = requests.post(FORM_URL, data=dados_form)
+                
+                if resposta.status_code == 200:
+                    st.success(f"Item {nome} enviado para a planilha!")
+                else:
+                    st.error("Erro ao enviar. Verifique a internet.")
             
     except Exception as e:
-        st.error(f"Erro: {e}")
+        st.error(f"Erro ao processar XML: {e}")
 
 st.markdown("---")
-st.header("2. Estoque Atual (Direto da Planilha)")
-dados = buscar_estoque()
-st.dataframe(dados, use_container_width=True)
+st.info("Para ver o estoque completo, abra sua planilha de respostas do Google Forms.")
